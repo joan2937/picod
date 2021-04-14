@@ -27,6 +27,7 @@ GP15 o  o  GP16
 #include <string.h>
 #include "pico/stdlib.h"
 #include "pico/mutex.h"
+#include "pico/multicore.h"
 #include "hardware/gpio.h"
 #include "hardware/irq.h"
 #include "hardware/adc.h"
@@ -41,7 +42,7 @@ GP15 o  o  GP16
 
 /* defines */
 
-#define PD_VERSION 0x00000001
+#define PD_VERSION 0x00000003
 
 #define PD_LINK_UART 0
 #define PD_LINK_USB 1
@@ -76,7 +77,7 @@ GP15 o  o  GP16
 
 #define MSG_HEADER_LEN 5
 
-#define MAX_REPORTS 4000
+#define MAX_REPORTS 10000
 #define MAX_EMITS 100
 
 #define PD_NUM_GPIO 30
@@ -506,7 +507,7 @@ uint32_t swap32(uint32_t x)
 uint16_t swap16(uint16_t x)
 { return __builtin_bswap16(x);}
 
-void my_gpio_handler()
+void my_core1_gpio_handler()
 {
    static uint32_t reportedLevels = -1;
    uint32_t nowLevels;
@@ -1346,21 +1347,8 @@ int cmdExec(uint8_t *cBuf)
          g.GPIO_alert |= set_bits;
          g.GPIO_alert &= ~clear_bits;
 
-         for (i=0; i<PD_NUM_GPIO; i++)
-         {
-            if (GPIO_mask & (1<<i))
-            {
-               if (ALERT_mask & (1<<i))
-               {
-                  gpio_set_irq_enabled(
-                     i, GPIO_IRQ_EDGE_RISE|GPIO_IRQ_EDGE_FALL, true);
-               }
-               else
-               {
-                  gpio_set_irq_enabled(i, 0xff, false);
-               }
-            }
-         }
+         multicore_fifo_push_blocking(GPIO_mask);
+         multicore_fifo_push_blocking(ALERT_mask);
 
          if (g.debug_mask & DBG_LEVEL_1)
          {
@@ -1523,7 +1511,9 @@ int cmdExec(uint8_t *cBuf)
 
                I2C[channel]->hw->intr_mask = I2C_IC_INTR_MASK_M_RD_REQ_BITS |
                                              I2C_IC_INTR_MASK_M_RX_FULL_BITS;
+
                irq_set_exclusive_handler(I2C0_IRQ+channel, my_i2c_handler);
+
                irq_set_enabled(I2C0_IRQ+channel, true);
 
                i2c_set_slave_mode(I2C[channel], true, slave_addr);
@@ -2661,30 +2651,31 @@ uint32_t watchdog(uint32_t levels, uint32_t tick)
    return wdogd;
 }
 
-int emitLevels(int reports)
+void emitLevels(int reports)
 {
    static uint32_t reportedLevels = -1;
+   static int emitCount=0;
+   static uint32_t emitTick=0;
    uint32_t levels;
    uint32_t tick;
    int nextPos;
    int i;
    uint32_t wdogd;
    pd_report_t gpiorpt;
+   int micros;
    uint8_t buf[256];
-   bool irq_report;
-   int count=0;
 
    do
    {
       tick = time_us_32();
       levels = gpio_get_all();
-      irq_report = false;
 
       if (rawReadPos != rawWritePos)
       {
          tick = raw_report[rawReadPos].tick;
          levels = raw_report[rawReadPos].levels;
-         irq_report = true;
+         nextPos = (rawReadPos + 1) % MAX_REPORTS;
+         rawReadPos = nextPos;
       }
 
       /* anything being debounced? */
@@ -2704,7 +2695,7 @@ int emitLevels(int reports)
          gpiorpt.tick = swap32(tick);
          gpiorpt.levels = swap32(levels);
 
-         emit_report[count++] = gpiorpt;
+         emit_report[emitCount++] = gpiorpt;
 
          if (g.debug_mask & DBG_LEVEL_EVENT)
          {
@@ -2715,12 +2706,6 @@ int emitLevels(int reports)
          reportedLevels = levels;
       }
 
-      if (irq_report)
-      {
-         nextPos = (rawReadPos + 1) % MAX_REPORTS;
-         rawReadPos = nextPos;
-      }
-
       /* only send watchdogs for alert GPIO */
 
       if (wdogd & g.GPIO_alert)
@@ -2728,7 +2713,7 @@ int emitLevels(int reports)
          gpiorpt.levels = swap32((wdogd & g.GPIO_alert) | WATCHDOG_BIT);
          gpiorpt.tick = swap32(tick);
 
-         emit_report[count++] = gpiorpt;
+         emit_report[emitCount++] = gpiorpt;
 
          if (g.debug_mask & DBG_LEVEL_WATCHDOG)
          {
@@ -2738,22 +2723,97 @@ int emitLevels(int reports)
          }
       }
    }
-   while ((rawReadPos != rawWritePos) && (count < reports));
+   while ((rawReadPos != rawWritePos) && (emitCount < reports));
 
-   if (count) cmdRespond(
-      MSG_GPIO_LEVELS, sizeof(pd_report_t)*count, (void*)emit_report);
+   micros = tick - emitTick;
 
-   g.GPIO_levels = levels;
-   g.GPIO_tick = tick;
+   if (emitCount)
+   {
+      if ((emitCount > (MAX_EMITS-10))  || (micros > 20000))
+      {
+         cmdRespond(MSG_GPIO_LEVELS, sizeof(pd_report_t)*emitCount,
+            (void*)emit_report);
+         emitCount = 0;
+         emitTick = tick;
+         g.GPIO_levels = levels;
+         g.GPIO_tick = tick;
+      }
+   }
+   else
+   {
+      g.GPIO_levels = levels;
+      g.GPIO_tick = tick;
+   }
+}
 
-   return count;
+void emitEvents()
+{
+   int i, used, moved, count;
+   uint32_t event_flag;
+   uint8_t buf[256];
+
+   event_flag = g.event_flag & g.event_alert; // anything interesting?
+
+   if (event_flag)
+   {
+      for (i=0; i<EVT_BUFS; i++)
+      {
+         if (event_flag & (1<<i))
+         {
+            g.event_flag ^= (1<<i); // clear reported flag
+
+            used = bufUsed(i); // bytes in buf
+
+            switch(pd_event_config[i].type)
+            {
+               case EVENT_ACTIVITY:
+                  buf[0] = i;
+                  pack16(buf+1, used);
+                  cmdRespond(MSG_ASYNC, 3, buf);
+                  break;
+
+               case EVENT_COUNT:
+                  if (( (i <= EVT_MAX_RX) &&
+                        (used >= pd_event_config[i].count) ) ||
+                      ( (i > EVT_MAX_RX) &&
+                        (used <= pd_event_config[i].count) ) )
+                  {
+                     buf[0] = i;
+                     pack16(buf+1, used);
+                     cmdRespond(MSG_ASYNC, 3, buf);
+                  }
+                  break;
+
+               case EVENT_RETURN_COUNT:
+               case EVENT_RETURN_COUNT_PLUS:
+                  if ((i <= EVT_MAX_RX) &&
+                      (used >= pd_event_config[i].count))
+                  {
+                     if (pd_event_config[i].type == EVENT_RETURN_COUNT)
+                        count = pd_event_config[i].count;
+                     else
+                        count = sizeof(buf) - 3;
+                     moved = bufPop(i, count, buf+3);
+                     buf[0]=i;
+                     used = bufUsed(i); // bytes left in buf
+                     pack16(buf+1, used);
+                     cmdRespond(MSG_ASYNC, 3+moved, buf);
+                  }
+                  break;
+            }
+         }
+      }
+   }
 }
 
 void pd_init()
 {
    int i;
 
-   irq_set_enabled(IO_IRQ_BANK0, false);
+   /* switch off GPIO IRQ on core1 */
+
+   multicore_fifo_push_blocking(PD_MASK_USER);
+   multicore_fifo_push_blocking(0);
 
    for (i=0; i<2; i++)
    {
@@ -2781,27 +2841,64 @@ void pd_init()
             break;
 
          default:
-            gpio_set_irq_enabled(i, 0xff, false);
             pd_set_mode(i, PD_FUNC_FREE, -1, -1);
       }
    }
+}
 
-   irq_set_exclusive_handler(IO_IRQ_BANK0, my_gpio_handler);
+void main_core1()
+{
+   uint32_t ALERT_mask, GPIO_mask;
+   int i;
+
+   for (i=0; i<PD_NUM_GPIO; i++)
+   {
+      switch(i)
+      {
+         case 23:
+         case 24:
+         case 29:
+            break;
+
+         default:
+            gpio_set_irq_enabled(i, 0xff, false);
+      }
+   }
+
+   irq_set_exclusive_handler(IO_IRQ_BANK0, my_core1_gpio_handler);
    irq_set_enabled(IO_IRQ_BANK0, true);
+
+   /* wait for changes to alert GPIO and apply */
+
+   while (1)
+   {
+      GPIO_mask = multicore_fifo_pop_blocking();
+      ALERT_mask = multicore_fifo_pop_blocking();
+
+      for (i=0; i<PD_NUM_GPIO; i++)
+      {
+         if (GPIO_mask & (1<<i))
+         {
+            if (ALERT_mask & (1<<i))
+            {
+               gpio_set_irq_enabled(
+                  i, GPIO_IRQ_EDGE_RISE|GPIO_IRQ_EDGE_FALL, true);
+            }
+            else
+            {
+               gpio_set_irq_enabled(i, 0xff, false);
+            }
+         }
+      }
+   }
 }
 
 int main()
 {
-   int i;
-   int count;
-   int moved;
-   uint8_t buf[256];
    uint16_t cmdPos;
    uint16_t cmdLen;
-   uint32_t event_flag;
-   int used;
-
-   pd_init();
+   uint32_t f1, f2, f3, f4, f5;
+   uint8_t buf[256];
 
    gpio_init(LED_PIN);
    gpio_set_dir(LED_PIN, GPIO_OUT);
@@ -2836,6 +2933,10 @@ int main()
    }
 
 
+   pd_init();
+
+   multicore_launch_core1(main_core1);
+
    while (1)
    {
       //toggle_led();
@@ -2862,61 +2963,9 @@ int main()
          }
       }
 
-      count = emitLevels(MAX_EMITS-1);
+      emitLevels(MAX_EMITS-1);
 
-      event_flag = g.event_flag & g.event_alert; // anything interesting?
-
-      if (event_flag)
-      {
-         for (i=0; i<EVT_BUFS; i++)
-         {
-            if (event_flag & (1<<i))
-            {
-               g.event_flag ^= (1<<i); // clear reported flag
-
-               used = bufUsed(i); // bytes in buf
-
-               switch(pd_event_config[i].type)
-               {
-                  case EVENT_ACTIVITY:
-                     buf[0] = i;
-                     pack16(buf+1, used);
-                     cmdRespond(MSG_ASYNC, 3, buf);
-                     break;
-
-                  case EVENT_COUNT:
-                     if (( (i <= EVT_MAX_RX) &&
-                           (used >= pd_event_config[i].count) ) ||
-                         ( (i > EVT_MAX_RX) &&
-                           (used <= pd_event_config[i].count) ) )
-                     {
-                        buf[0] = i;
-                        pack16(buf+1, used);
-                        cmdRespond(MSG_ASYNC, 3, buf);
-                     }
-                     break;
-
-                  case EVENT_RETURN_COUNT:
-                  case EVENT_RETURN_COUNT_PLUS:
-                     if ((i <= EVT_MAX_RX) &&
-                         (used >= pd_event_config[i].count))
-                     {
-                        if (pd_event_config[i].type == EVENT_RETURN_COUNT)
-                           count = pd_event_config[i].count;
-                        else
-                           count = sizeof(buf) - 3;
-                        moved = bufPop(i, count, buf+3);
-                        buf[0]=i;
-                        used = bufUsed(i); // bytes left in buf
-                        pack16(buf+1, used);
-                        cmdRespond(MSG_ASYNC, 3+moved, buf);
-                     }
-                     break;
-
-               }
-            }
-         }
-      }
+      emitEvents();
    }
 }
 

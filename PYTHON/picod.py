@@ -543,6 +543,7 @@ class _callback_thread(threading.Thread):
                      length, = struct.unpack('>H', buf[:2])
                      if buf[3] == MSG_GPIO_LEVELS: # level report
                         reports = int((length-4) / 8)
+                        #print(reports)
                         for i in range(reports):
                            p = (i*8)+4
                            tick, levels = struct.unpack(">II", buf[p:p+8])
