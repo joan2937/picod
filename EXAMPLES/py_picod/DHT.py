@@ -1,6 +1,6 @@
 """
 DHT.py
-2021-04-01
+2021-04-15
 Public Domain
 
 http://abyz.me.uk/picod/py_picod.html
@@ -111,9 +111,7 @@ def toggle():
 
    pico.sleep(0.005, flush=False)
 
-   pico.gpio_set_input(DHT22, flush=False)
-
-   pico.sleep(0.006, flush=True)
+   pico.gpio_set_input(DHT22, flush=True)
 
 pico = picod.pico()
 if not pico.connected:

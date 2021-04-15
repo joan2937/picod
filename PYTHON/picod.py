@@ -141,7 +141,8 @@ reset                Resets the Pico (frees GPIO, close I2C, SPI, serial)
 sleep                Sleeps the Pico
 tick                 Returns the current Pico tick
 version              Returns the Pico software version (dotted quad)
-debug_mask           Sets the Pico debug mask
+set_config_value     Sets the value of an internal configuration item
+get_config_value     Gets the value of an internal configuration item
 
 CALLBACKS
 
@@ -163,7 +164,7 @@ import binascii
 import threading
 import atexit
 
-VERSION = 0x00000001
+VERSION = 0x00000100
 
 CLOCK_HZ = 125e6
 
@@ -235,6 +236,7 @@ STATUS_UNKNOWN_COMMAND = 9
 STATUS_TIMED_OUT = 10
 STATUS_INVALID_WHEN_MASTER = 11
 STATUS_INVALID_WHEN_SLAVE = 12
+STATUS_BAD_CONFIG_ITEM = 13
 
 _status = {
    STATUS_OKAY: "okay",
@@ -250,6 +252,7 @@ _status = {
    STATUS_TIMED_OUT: "command timed out",
    STATUS_INVALID_WHEN_MASTER: "invalid command when master",
    STATUS_INVALID_WHEN_SLAVE: "invalid command when slave",
+   STATUS_BAD_CONFIG_ITEM: "invalid configuration item",
 }
 
 REPLY_NONE = 0
@@ -308,7 +311,8 @@ _CMD_UART_WRITE = 88
 _CMD_TICK = 94
 _CMD_SLEEP_US = 95
 _CMD_RESET_PICO = 96
-_CMD_DEBUG_MASK = 97
+_CMD_SET_CONFIG_VAL = 97
+_CMD_GET_CONFIG_VAL = 98
 _CMD_PD_VERSION = 99
 
 MSG_HEADER = 0xff
@@ -2438,16 +2442,38 @@ class pico():
 
       return status, self._GPIO_tick
 
-   def debug_mask(self, MASK, reply=REPLY_NONE, flush=True):
+   def set_config_value(self, cfg_item, cfg_value, reply=REPLY_NOW, flush=True):
       """
-      Sets the Pico debug mask.
+      Sets the value of an internal configuration item.
 
-      MASK:= the mask to set.
+       cfg_item:= the config item.
+      cfg_value:= the value to set.
       """
 
-      data = struct.pack(">I", MASK)
+      data = struct.pack(">II", cfg_item, cfg_value)
 
-      return self._request(_CMD_DEBUG_MASK, data, reply=reply, flush=flush)
+      return self._request(_CMD_SET_CONFIG_VAL,
+         data, reply=reply, flush=flush)[0]
+
+   def get_config_value(self, cfg_item, reply=REPLY_NOW, flush=True):
+      """
+      Gets the value of an internal configuration item.
+
+      cfg_item:= the config item.
+      """
+
+      data = struct.pack(">I", cfg_item)
+
+      status, data=  self._request(_CMD_GET_CONFIG_VAL,
+         data, reply=reply, flush=flush)
+
+      value = None
+
+      if status == STATUS_OKAY:
+         value, = struct.unpack(">I", data)
+
+      return status, value
+
 
 # CALLBACKS ---------------------------------------------------------------
 

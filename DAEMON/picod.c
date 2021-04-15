@@ -42,7 +42,9 @@ GP15 o  o  GP16
 
 /* defines */
 
-#define PD_VERSION 0x00000003
+#define PD_VERSION 0x00000100
+
+#define CFG_DEBUG_MASK 0
 
 #define PD_LINK_UART 0
 #define PD_LINK_USB 1
@@ -152,7 +154,8 @@ GP15 o  o  GP16
 #define PD_CMD_TICK 94
 #define PD_CMD_SLEEP_US 95
 #define PD_CMD_RESET_PICO 96
-#define PD_CMD_DEBUG_MASK 97
+#define PD_CMD_SET_CONFIG_VAL 97
+#define PD_CMD_GET_CONFIG_VAL 98
 #define PD_CMD_PD_VERSION 99
 
 #define STATUS_OKAY 0
@@ -168,6 +171,7 @@ GP15 o  o  GP16
 #define STATUS_TIMED_OUT 10
 #define STATUS_INVALID_WHEN_MASTER 11
 #define STATUS_INVALID_WHEN_SLAVE 12
+#define STATUS_BAD_CONFIG_ITEM 13
 
 
 #define GPIO_ADC_BASE 26
@@ -269,7 +273,6 @@ typedef struct pd_event_config_s
 
 typedef struct global_s
 {
-   uint32_t debug_mask;
    int adcInited;
    int adcChannelSelected;
    uint32_t pwmReadWrap[8];
@@ -431,13 +434,14 @@ static const uint16_t crctab[256] =
 callbk_t _GETCHAR;
 callbk_t _PUTCHAR;
 
-int rawWritePos;
-int rawReadPos;
 int msgLen;
 uint16_t msgCrc1;
 uint16_t msgCrc2;
 
 /* re-init rPos and wPos when reset */
+
+int rawWritePos;
+int rawReadPos;
 
 uint8_t uartRxBuf0[UART_BUF_SIZE];
 uint8_t uartRxBuf1[UART_BUF_SIZE];
@@ -466,6 +470,8 @@ pd_buf_t pd_buf[EVT_BUFS] =
 };
 
 /* re-init when reset */
+
+uint32_t cfg_debug_mask = CFG_DEBUG_MASK;
 
 global_t g;
 pd_config_t pd_config[PD_NUM_GPIO];
@@ -913,12 +919,12 @@ void cmdRespond(uint cmd, int len, uint8_t *buf)
 
 void debug(uint8_t *buf)
 {
-   if (g.debug_mask) cmdRespond(MSG_DEBUG, strlen(buf), buf);
+   if (cfg_debug_mask) cmdRespond(MSG_DEBUG, strlen(buf), buf);
 }
 
 void fatal(uint8_t *buf)
 {
-   if (g.debug_mask) cmdRespond(MSG_ERROR, strlen(buf), buf);
+   if (cfg_debug_mask) cmdRespond(MSG_ERROR, strlen(buf), buf);
 }
 
 void pd_set_mode(uint gpio, uint func, uint subfunc, uint channel)
@@ -982,6 +988,7 @@ int cmdExec(uint8_t *cBuf)
    uint32_t micros, GPIO_mask, DIR_mask, LEVEL_mask, ALERT_mask, baud,
             timeout_us, set_value;
    uint32_t func_0_7, func_8_15, func_16_23, func_24_31, pud_0_15, pud_16_31;
+   uint32_t item, value;
 
    pwm_config pwmCfg;
    bool initing;
@@ -1033,7 +1040,7 @@ int cmdExec(uint8_t *cBuf)
             }
          }
 
-         if (g.debug_mask & DBG_LEVEL_COMMAND_OPEN_CLOSE)
+         if (cfg_debug_mask & DBG_LEVEL_COMMAND_OPEN_CLOSE)
          {
             sprintf(buf, "GPIO_OPEN: GPIO=%x (OPEN=%x)",
                GPIO_mask, g.is_GPIO);
@@ -1056,7 +1063,7 @@ int cmdExec(uint8_t *cBuf)
             }
          }
 
-         if (g.debug_mask & DBG_LEVEL_COMMAND_OPEN_CLOSE)
+         if (cfg_debug_mask & DBG_LEVEL_COMMAND_OPEN_CLOSE)
          {
             sprintf(buf, "GPIO_CLOSE: GPIO=%x (OPEN=%x)",
                GPIO_mask, g.is_GPIO);
@@ -1073,7 +1080,7 @@ int cmdExec(uint8_t *cBuf)
          DIR_mask = unpack32(cBuf+CMD_CMD+5);
          LEVEL_mask = unpack32(cBuf+CMD_CMD+9);
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "GPIO_SET_IN_OUT: GPIO=%x OUT=%x LEVELS=%x",
                GPIO_mask, DIR_mask, LEVEL_mask);
@@ -1104,7 +1111,7 @@ int cmdExec(uint8_t *cBuf)
 
          // no parameters
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "GPIO_READ");
             debug(buf);
@@ -1122,7 +1129,7 @@ int cmdExec(uint8_t *cBuf)
          GPIO_mask = unpack32(cBuf+CMD_CMD+1) & PD_MASK_USER;
          LEVEL_mask = unpack32(cBuf+CMD_CMD+5);
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "GPIO_WRITE: GPIO=%x LEVEL=%x",
                GPIO_mask, LEVEL_mask);
@@ -1157,7 +1164,7 @@ int cmdExec(uint8_t *cBuf)
          pud_0_15 = unpack32(cBuf+CMD_CMD+5);
          pud_16_31 = unpack32(cBuf+CMD_CMD+9);
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "PULLS_SET: GPIO=%x 0-15=%x 16-31=%x",
                GPIO_mask, pud_0_15, pud_16_31);
@@ -1185,7 +1192,7 @@ int cmdExec(uint8_t *cBuf)
 
          // no parameters
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "PULLS_GET");
             debug(buf);
@@ -1222,7 +1229,7 @@ int cmdExec(uint8_t *cBuf)
          func_16_23 = unpack32(cBuf+CMD_CMD+13);
          func_24_31 = unpack32(cBuf+CMD_CMD+17);
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf,
                "FUNCTION_SET: GPIO=%x 0-7=%x 8-15=%x 16-23=%x 24_31=%x",
@@ -1251,7 +1258,7 @@ int cmdExec(uint8_t *cBuf)
 
          // no parameters
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "FUNCTION_GET");
             debug(buf);
@@ -1298,7 +1305,7 @@ int cmdExec(uint8_t *cBuf)
             else        g.GPIO_debounce &= ~(1ul<<gpio);
          }
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "ALERT_DEBOUNCE: gpio=%d micros=%d (mask=%x)",
                gpio, micros, g.GPIO_debounce);
@@ -1325,7 +1332,7 @@ int cmdExec(uint8_t *cBuf)
             else        g.GPIO_watchdog &= ~(1ul<<gpio);
          }
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "ALERT_WATCHDOG: gpio=%d micros=%d (mask=%x)",
                gpio, micros, g.GPIO_watchdog);
@@ -1350,7 +1357,7 @@ int cmdExec(uint8_t *cBuf)
          multicore_fifo_push_blocking(GPIO_mask);
          multicore_fifo_push_blocking(ALERT_mask);
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "ALERT_SELECT: GPIO=%x ALERTS=%x alert_GPIO=%x",
                GPIO_mask, ALERT_mask, g.GPIO_alert);
@@ -1375,7 +1382,7 @@ int cmdExec(uint8_t *cBuf)
             else      g.event_alert &= (~(1<<id));
          }
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "EVT_CONFIG: id=%d type=%d count=%d alert=%x",
                id, type, count, g.event_alert);
@@ -1390,7 +1397,7 @@ int cmdExec(uint8_t *cBuf)
 
          channel = cBuf[CMD_CMD+1];
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "GPIO_ADCR: channel=%d", channel);
             debug(buf);
@@ -1448,7 +1455,7 @@ int cmdExec(uint8_t *cBuf)
 
          channel = cBuf[CMD_CMD+1];
 
-         if (g.debug_mask & DBG_LEVEL_COMMAND_OPEN_CLOSE)
+         if (cfg_debug_mask & DBG_LEVEL_COMMAND_OPEN_CLOSE)
          {
             sprintf(buf, "GPIO_ADCF: channel=%d", channel);
             debug(buf);
@@ -1474,7 +1481,7 @@ int cmdExec(uint8_t *cBuf)
          scl = cBuf[CMD_CMD+7];
          slave_addr = cBuf[CMD_CMD+8];
 
-         if (g.debug_mask & DBG_LEVEL_COMMAND_OPEN_CLOSE)
+         if (cfg_debug_mask & DBG_LEVEL_COMMAND_OPEN_CLOSE)
          {
             sprintf(buf, "I2C: ch=%d sda=%d scl=%d baud=%d slave=%d",
                channel, sda, scl, baud, slave_addr);
@@ -1539,7 +1546,7 @@ int cmdExec(uint8_t *cBuf)
 
          channel = cBuf[CMD_CMD+1];
 
-         if (g.debug_mask & DBG_LEVEL_COMMAND_OPEN_CLOSE)
+         if (cfg_debug_mask & DBG_LEVEL_COMMAND_OPEN_CLOSE)
          {
             sprintf(buf, "I2C_CLOSE: channel=%d", channel);
             debug(buf);
@@ -1570,7 +1577,7 @@ int cmdExec(uint8_t *cBuf)
          addr = cBuf[CMD_CMD+8];
          nostop = cBuf[CMD_CMD+9];
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "I2C(read): ch=%d addr=%d stop=%d to=%d len=%d",
                channel, addr, nostop, timeout_us, count);
@@ -1614,7 +1621,7 @@ int cmdExec(uint8_t *cBuf)
          addr = cBuf[CMD_CMD+8];
          nostop = cBuf[CMD_CMD+9];
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "I2C(write): ch=%d addr=%d stop=%d to=%d len=%d",
                channel, addr, nostop, timeout_us, count);
@@ -1648,7 +1655,7 @@ int cmdExec(uint8_t *cBuf)
          channel = cBuf[CMD_CMD+1];
          count = cBuf[CMD_CMD+2];
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "I2C_PUSH: ch=%d count=%d", channel, count);
             debug(buf);
@@ -1683,7 +1690,7 @@ int cmdExec(uint8_t *cBuf)
          channel = cBuf[CMD_CMD+1];
          count = cBuf[CMD_CMD+2];
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "I2C_POP: ch=%d count=%d", channel, count);
             debug(buf);
@@ -1718,7 +1725,7 @@ int cmdExec(uint8_t *cBuf)
 
          gpio = cBuf[CMD_CMD+1];
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "PWM_READ: g=%d cmd=%d", gpio, cmd);
             debug(buf);
@@ -1825,7 +1832,7 @@ int cmdExec(uint8_t *cBuf)
          steps = unpack16(cBuf+CMD_CMD+3);
          high_steps = unpack16(cBuf+CMD_CMD+5);
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "PWM/SERVO: g=%d cmd=%d clkdiv=%d steps=%d high=%d",
                gpio, cmd, clkdiv, steps, high_steps);
@@ -1869,7 +1876,7 @@ int cmdExec(uint8_t *cBuf)
 
          gpio = cBuf[CMD_CMD+1];
 
-         if (g.debug_mask & DBG_LEVEL_COMMAND_OPEN_CLOSE)
+         if (cfg_debug_mask & DBG_LEVEL_COMMAND_OPEN_CLOSE)
          {
             sprintf(buf, "PWM_CLOSE: gpio=%d", gpio);
             debug(buf);
@@ -1900,7 +1907,7 @@ int cmdExec(uint8_t *cBuf)
          cs = cBuf[CMD_CMD+7];
          baud = unpack32(cBuf+CMD_CMD+8);
 
-         if (g.debug_mask & DBG_LEVEL_COMMAND_OPEN_CLOSE)
+         if (cfg_debug_mask & DBG_LEVEL_COMMAND_OPEN_CLOSE)
          {
             sprintf(buf,
                "SPI_OPEN: ch=%d tx=%d rx=%d sck=%d mode=%d"
@@ -1985,7 +1992,7 @@ int cmdExec(uint8_t *cBuf)
 
          channel = cBuf[CMD_CMD+1];
 
-         if (g.debug_mask & DBG_LEVEL_COMMAND_OPEN_CLOSE)
+         if (cfg_debug_mask & DBG_LEVEL_COMMAND_OPEN_CLOSE)
          {
             sprintf(buf, "SPI_CLOSE: channel=%d", channel);
             debug(buf);
@@ -2014,7 +2021,7 @@ int cmdExec(uint8_t *cBuf)
          count = unpack16(cBuf+CMD_CMD+3);
          dummy = cBuf[CMD_CMD+5];
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "SPI_READ: ch=%d cs=%d count=%d dummy=%d",
                channel, cs, count, dummy);
@@ -2068,7 +2075,7 @@ int cmdExec(uint8_t *cBuf)
          cs = cBuf[CMD_CMD+2];
          count = unpack16(cBuf+CMD_CMD+3);
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             if (cmd == PD_CMD_SPI_XFER)
                sprintf(buf, "SPI_XFER: ch=%d cs=%d length=%d",
@@ -2127,7 +2134,7 @@ int cmdExec(uint8_t *cBuf)
          channel = cBuf[CMD_CMD+1];
          count = cBuf[CMD_CMD+2];
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "SPI_PUSH: ch=%d count=%d", channel, count);
             debug(buf);
@@ -2166,7 +2173,7 @@ int cmdExec(uint8_t *cBuf)
          channel = cBuf[CMD_CMD+1];
          count = cBuf[CMD_CMD+2];
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "SPI_POP: ch=%d count=%d", channel, count);
             debug(buf);
@@ -2206,7 +2213,7 @@ int cmdExec(uint8_t *cBuf)
          stops = cBuf[CMD_CMD+11];
          parity = cBuf[CMD_CMD+12];
 
-         if (g.debug_mask & DBG_LEVEL_COMMAND_OPEN_CLOSE)
+         if (cfg_debug_mask & DBG_LEVEL_COMMAND_OPEN_CLOSE)
          {
             sprintf(buf,
                "UART: ch=%d tx=%d rx=%d baud=%d cts=%d, rts=%d, "
@@ -2290,7 +2297,7 @@ int cmdExec(uint8_t *cBuf)
 
          channel = cBuf[CMD_CMD+1];
 
-         if (g.debug_mask & DBG_LEVEL_COMMAND_OPEN_CLOSE)
+         if (cfg_debug_mask & DBG_LEVEL_COMMAND_OPEN_CLOSE)
          {
             sprintf(buf, "UART_CLOSE: channel=%d", channel);
             debug(buf);
@@ -2318,7 +2325,7 @@ int cmdExec(uint8_t *cBuf)
          channel = cBuf[CMD_CMD+1];
          count = unpack16(cBuf+CMD_CMD+2);
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "UART READ: ch=%d count=%d", channel, count);
             debug(buf);
@@ -2348,7 +2355,7 @@ int cmdExec(uint8_t *cBuf)
          channel = cBuf[CMD_CMD+1];
          count = unpack16(cBuf+CMD_CMD+2);
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "UART write: tx=%d length=%d", channel, count);
             debug(buf);
@@ -2368,7 +2375,7 @@ int cmdExec(uint8_t *cBuf)
 
          // no parameters
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "GPIO_TICK");
             debug(buf);
@@ -2385,7 +2392,7 @@ int cmdExec(uint8_t *cBuf)
 
          micros = unpack32(cBuf+CMD_CMD+1);
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "SLEEP_US: us=%d", micros);
             debug(buf);
@@ -2399,7 +2406,7 @@ int cmdExec(uint8_t *cBuf)
 
          // no parameters
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "RESET_PICO");
             debug(buf);
@@ -2409,14 +2416,52 @@ int cmdExec(uint8_t *cBuf)
 
          break;
 
-      case PD_CMD_DEBUG_MASK:
+      case PD_CMD_SET_CONFIG_VAL:
 
-         // ">I" g.debug_mask
+         // ">II" item value
 
-         g.debug_mask = unpack32(cBuf+CMD_CMD+1);
+         item = unpack32(cBuf+CMD_CMD+1);
+         value = unpack32(cBuf+CMD_CMD+5);
 
-         sprintf(buf, "DEBUG: mask=%x", g.debug_mask);
+         sprintf(buf, "SET_CONFIG_VAL: item=%d value=%d (0x%x)",
+            item, value, value);
          debug(buf);
+
+         switch(item)
+         {
+            case 0:
+               cfg_debug_mask = value;
+               break;
+
+            default:
+               status = STATUS_BAD_CONFIG_ITEM;
+         }
+
+         break;
+
+      case PD_CMD_GET_CONFIG_VAL:
+
+         // ">I" item
+
+         item = unpack32(cBuf+CMD_CMD+1);
+
+         sprintf(buf, "GET_CONFIG_VAL: item=%d", item);
+         debug(buf);
+
+         value = 0;
+
+         switch(item)
+         {
+            case 0:
+               value = cfg_debug_mask;
+               break;
+
+            default:
+               status = STATUS_BAD_CONFIG_ITEM;
+         }
+
+         pack32(RES+1, value);
+         reply_len = 5;
 
          break;
 
@@ -2424,7 +2469,7 @@ int cmdExec(uint8_t *cBuf)
 
          // no parameters
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "PD_VERSION");
             debug(buf);
@@ -2551,7 +2596,7 @@ uint32_t debounce(uint32_t levels, uint32_t tick)
             {
                micro_diff = tick - p->last_evt_ts;
 
-               if (g.debug_mask & DBG_LEVEL_DEBOUNCE) 
+               if (cfg_debug_mask & DBG_LEVEL_DEBOUNCE) 
                {
                   sprintf(buf, "GPIO_debounce=%x g=%d md=%d deb=%d",
                      g.GPIO_debounce, i, micro_diff,
@@ -2629,7 +2674,7 @@ uint32_t watchdog(uint32_t levels, uint32_t tick)
             {
                micro_diff = tick - p->last_rpt_ts;
 
-               if (g.debug_mask & DBG_LEVEL_WATCHDOG)
+               if (cfg_debug_mask & DBG_LEVEL_WATCHDOG)
                {
                   sprintf(buf, "watcdog_gpio=%x g=%d md=%d wdog=%d",
                      g.GPIO_watchdog, i, micro_diff,
@@ -2654,16 +2699,16 @@ uint32_t watchdog(uint32_t levels, uint32_t tick)
 void emitLevels(int reports)
 {
    static uint32_t reportedLevels = -1;
-   static int emitCount=0;
-   static uint32_t emitTick=0;
+   int count;
    uint32_t levels;
    uint32_t tick;
    int nextPos;
    int i;
    uint32_t wdogd;
    pd_report_t gpiorpt;
-   int micros;
    uint8_t buf[256];
+
+   count = 0;
 
    do
    {
@@ -2695,9 +2740,9 @@ void emitLevels(int reports)
          gpiorpt.tick = swap32(tick);
          gpiorpt.levels = swap32(levels);
 
-         emit_report[emitCount++] = gpiorpt;
+         emit_report[count++] = gpiorpt;
 
-         if (g.debug_mask & DBG_LEVEL_EVENT)
+         if (cfg_debug_mask & DBG_LEVEL_EVENT)
          {
             sprintf(buf, "levels report: %x->%x", reportedLevels, levels);
             debug(buf);
@@ -2713,9 +2758,9 @@ void emitLevels(int reports)
          gpiorpt.levels = swap32((wdogd & g.GPIO_alert) | WATCHDOG_BIT);
          gpiorpt.tick = swap32(tick);
 
-         emit_report[emitCount++] = gpiorpt;
+         emit_report[count++] = gpiorpt;
 
-         if (g.debug_mask & DBG_LEVEL_WATCHDOG)
+         if (cfg_debug_mask & DBG_LEVEL_WATCHDOG)
          {
             sprintf(buf, "wdog report: GPIO=%x ts=%d",
                swap32(gpiorpt.levels), swap32(gpiorpt.tick));
@@ -2723,27 +2768,16 @@ void emitLevels(int reports)
          }
       }
    }
-   while ((rawReadPos != rawWritePos) && (emitCount < reports));
+   while ((rawReadPos != rawWritePos) && (count < reports));
 
-   micros = tick - emitTick;
+   if (count)
+   {
+      cmdRespond(MSG_GPIO_LEVELS,
+         sizeof(pd_report_t)*count, (void*)emit_report);
+   }
 
-   if (emitCount)
-   {
-      if ((emitCount > (MAX_EMITS-10))  || (micros > 20000))
-      {
-         cmdRespond(MSG_GPIO_LEVELS, sizeof(pd_report_t)*emitCount,
-            (void*)emit_report);
-         emitCount = 0;
-         emitTick = tick;
-         g.GPIO_levels = levels;
-         g.GPIO_tick = tick;
-      }
-   }
-   else
-   {
-      g.GPIO_levels = levels;
-      g.GPIO_tick = tick;
-   }
+   g.GPIO_levels = levels;
+   g.GPIO_tick = tick;
 }
 
 void emitEvents()
@@ -2830,6 +2864,9 @@ void pd_init()
 
    for (i=0; i<EVT_BUFS; i++) bufReset(i);
 
+   rawWritePos = 0;
+   rawReadPos = 0;
+
    for (i=0; i<PD_NUM_GPIO; i++)
    {
       switch(i)
@@ -2844,6 +2881,8 @@ void pd_init()
             pd_set_mode(i, PD_FUNC_FREE, -1, -1);
       }
    }
+
+   cfg_debug_mask = CFG_DEBUG_MASK;
 }
 
 void main_core1()
@@ -2945,7 +2984,7 @@ int main()
       {
          // we have a legal message
 
-         if (g.debug_mask & DBG_LEVEL_1)
+         if (cfg_debug_mask & DBG_LEVEL_1)
          {
             sprintf(buf, "len=%d crc1=%4x crc2=%04x", msgLen, msgCrc1, msgCrc2);
             debug(buf);
