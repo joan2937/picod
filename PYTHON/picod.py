@@ -32,11 +32,11 @@ of the picod.pico class. Each instance gives access to a specific Pico.
 ...
 import picod
 
-picoA = picod.pico(device='ttyACM0')
+picoA = picod.pico(device='/dev/ttyACM0')
 if not picoA.connected:
    exit()
 
-picoB = picod.pico(device='ttyACM1')
+picoB = picod.pico(device='com4')
 if not picoB.connected:
    exit()
 ...
@@ -164,7 +164,7 @@ import binascii
 import threading
 import atexit
 
-VERSION = 0x00000100
+VERSION = 0x00000200
 
 CLOCK_HZ = 125e6
 
@@ -547,7 +547,7 @@ class _callback_thread(threading.Thread):
                      length, = struct.unpack('>H', buf[:2])
                      if buf[3] == MSG_GPIO_LEVELS: # level report
                         reports = int((length-4) / 8)
-                        #print(reports)
+                        #print("# rxd {}".format(reports))
                         for i in range(reports):
                            p = (i*8)+4
                            tick, levels = struct.unpack(">II", buf[p:p+8])
@@ -2613,14 +2613,14 @@ class pico():
 
    def __init__(
       self,
-      device = os.getenv("PICO_DEVICE", 'ttyACM0'),
+      device = os.getenv("PICO_DEVICE", '/dev/ttyACM0'),
       transport = os.getenv("PICO_TRANSPORT", 'serial')):
       """
       Grants access to a Pico's GPIO.
 
          device:= the phyical device used by the transport method.
-                  The default is 'ttyACM0' unless overridden by the
-                  PICO_DEVICE environment variable.
+                  The default is '/dev/ttyACM0' unless overridden
+                  by the PICO_DEVICE environment variable.
       transport:= the method of communicating with the Pico.
                   serial - use the standard Python serial module.
                   lgpio  - use the lgpio Python module.
@@ -2647,7 +2647,7 @@ class pico():
       try:
          if transport == 'serial':
             import serial
-            _pico_serial = serial.Serial("/dev/"+device, 230400, timeout=0)
+            _pico_serial = serial.Serial(device, 230400, timeout=0)
             self._pico_serial_read = _pico_serial.read
             self._pico_serial_write = _pico_serial.write
       
@@ -2677,7 +2677,7 @@ class pico():
          elif transport == 'pigpio':
             import pigpio
             sbc = pigpio.pi()
-            pico_serial = sbc.serial_open("/dev/"+device, 230400)
+            pico_serial = sbc.serial_open(device, 230400)
             def _serial_read(count):
                b, d = sbc.serial_read(_pico_serial, count)
                return d

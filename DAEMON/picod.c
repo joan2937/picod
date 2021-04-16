@@ -42,7 +42,7 @@ GP15 o  o  GP16
 
 /* defines */
 
-#define PD_VERSION 0x00000100
+#define PD_VERSION 0x00000200
 
 #define CFG_DEBUG_MASK 0
 
@@ -80,7 +80,7 @@ GP15 o  o  GP16
 #define MSG_HEADER_LEN 5
 
 #define MAX_REPORTS 10000
-#define MAX_EMITS 100
+#define MAX_EMITS 200
 
 #define PD_NUM_GPIO 30
 #define PD_MASK_USER 0x1e7fffff
