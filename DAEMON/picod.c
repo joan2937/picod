@@ -42,7 +42,7 @@ GP15 o  o  GP16
 
 /* defines */
 
-#define PD_VERSION 0x00000200
+#define PD_VERSION 0x00000300
 
 #define CFG_DEBUG_MASK 0
 

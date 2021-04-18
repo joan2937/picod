@@ -164,7 +164,7 @@ import binascii
 import threading
 import atexit
 
-VERSION = 0x00000200
+VERSION = 0x00000300
 
 CLOCK_HZ = 125e6
 
@@ -2569,19 +2569,61 @@ class pico():
 
       Returns an event callback instance.
 
-      The user supplied callback func is called whenever the activity
-      specified by [#event_mode#] is detected.
+      ...
+      import time
+      import picod
+
+      CHANNEL=1
+
+      def event_callback(id, left, text):
+         print("id={} left={} text={}".format(id, left, text))
+
+      pico = picod.pico()
+      if not pico.connected:
+         exit()
+
+      pico.reset() # Put Pico into a clean state
+
+      ecb = pico.event_callback(
+         picod.EVT_UART_1_RX,           # monitor UART 1 RX
+         picod.EVENT_RETURN_COUNT_PLUS, # callback on data and return data
+         5,                             # need 5 characters or more
+         event_callback)                # the callback to call
+
+      status, speed = pico.serial_open(CHANNEL,20,21,115200) # open serial link
+
+      if status == picod.STATUS_OKAY:
+
+         while True:
+
+            pico.serial_write(CHANNEL, time.asctime())
+            time.sleep(1)
+      ...
+
+      The user supplied callback [#func#] is called whenever the
+      activity specified by [#event_mode#] is detected.
+
+      For activity to be detected on UART 0/1 RX the corresponding
+      serial link must be open.
+
+      For activity to be detected on I2C 0/1 RX/TX the corresponding
+      I2C bus must be open in slave mode.
+
+      For activity to be detected on SPI 0/1 RX/TX the corresponding
+      SPI bus must be open in slave mode.
 
       The callback receives three parameters: the [#event_id#],
-      the buffer byte count, and a bytearray. The bytearray will be empty
-      unless the event_mode was EVENT_RETURN_COUNT or EVENT_RETURN_COUNT_PLUS
-      and the event is for a receieve buffer.
+      the remaining buffer byte count, and a bytearray. The
+      bytearray will be empty unless the event_mode was
+      EVENT_RETURN_COUNT or EVENT_RETURN_COUNT_PLUS and the event
+      is for a receive buffer.
 
       The callback may be cancelled by calling the callback instance's
       cancel() method.
 
       There may only be one callback per [#event_id#].  A new callback
       with the same [#event_id#] replaces any existing one.
+
       """
 
       assert 0 <= event_id < EVT_BUFS
@@ -2614,7 +2656,8 @@ class pico():
    def __init__(
       self,
       device = os.getenv("PICO_DEVICE", '/dev/ttyACM0'),
-      transport = os.getenv("PICO_TRANSPORT", 'serial')):
+      transport = os.getenv("PICO_TRANSPORT", 'serial'),
+      baud=230400, host=None, port=None):
       """
       Grants access to a Pico's GPIO.
 
@@ -2628,6 +2671,12 @@ class pico():
                   pigpio - use the pigpio Python module (remote).
                   The default is serial unless overridden by the
                   PICO_TRANSPORT environment variable.
+           baud:= the baud rate used between the Pico and the device.
+                  Changing the rate is unlikely to improve performance.
+           host:= The remote host (name or dotted quad).
+                  Only relevant when transport is rgpio or pigpio.
+           port:= The remote host port.
+                  Only relevant when transport is rgpio or pigpio.
 
       Returns a pico instance.
 
@@ -2646,43 +2695,77 @@ class pico():
       """
       try:
          if transport == 'serial':
+
             import serial
-            _pico_serial = serial.Serial(device, 230400, timeout=0)
+
+            _pico_serial = serial.Serial(device, baud, timeout=0)
+
             self._pico_serial_read = _pico_serial.read
             self._pico_serial_write = _pico_serial.write
       
          elif transport == 'lgpio':
+
             import lgpio as sbc
-            _pico_serial = sbc.serial_open(device, 230400)
+
+            _pico_serial = sbc.serial_open(device, baud)
+
             def _serial_read(count):
                b, d = sbc.serial_read(_pico_serial, count)
                return d
+
             def _serial_write(data):
                sbc.serial_write(_pico_serial, data)
+
             self._pico_serial_read = _serial_read
             self._pico_serial_write = _serial_write
 
          elif transport == 'rgpio':
+
             import rgpio
-            sbc = rgpio.sbc()
-            _pico_serial = sbc.serial_open(device, 230400)
+
+            if host is None and port is None:
+               sbc = rgpio.sbc()
+            elif host is None:
+               sbc = rgpio.sbc(port=port)
+            elif port is None:
+               sbc = rgpio.sbc(host=host)
+            else:
+               sbc = rgpio.sbc(host=host, port=port)
+
+            _pico_serial = sbc.serial_open(device, baud)
+
             def _serial_read(count):
                b, d = sbc.serial_read(_pico_serial, count)
                return d
+
             def _serial_write(data):
                sbc.serial_write(_pico_serial, data)
+
             self._pico_serial_read = _serial_read
             self._pico_serial_write = _serial_write
 
          elif transport == 'pigpio':
+
             import pigpio
-            sbc = pigpio.pi()
-            pico_serial = sbc.serial_open(device, 230400)
+
+            if host is None and port is None:
+               sbc = pigpio.pi()
+            elif host is None:
+               sbc = pigpio.pi(port=port)
+            elif port is None:
+               sbc = pigpio.pi(host=host)
+            else:
+               sbc = pigpio.pi(host=host, port=port)
+
+            _pico_serial = sbc.serial_open(device, baud)
+
             def _serial_read(count):
                b, d = sbc.serial_read(_pico_serial, count)
                return d
+
             def _serial_write(data):
                sbc.serial_write(_pico_serial, data)
+
             self._pico_serial_read = _serial_read
             self._pico_serial_write = _serial_write
 
@@ -2697,7 +2780,7 @@ class pico():
 
          else:
             print("unknown PICO_LINK of {}".format(transport))
-            exit()
+            raise ValueError
 
       except:
          exception = 1
@@ -2712,7 +2795,18 @@ class pico():
       else:
          self.connected = False
 
-      self.repr = "<pico transport={} device={}>".format(transport, device)
+      if host is None and port is None:
+         hp = ""
+      elif host is None:
+         hp = " (port={})".format(port)
+      elif port is None:
+         hp = " (host={})".format(host)
+      else:
+         hp = " (host={} port={})".format(host, port)
+      
+      self.repr = "<pico transport={}{} device={} (baud={})>".format(
+         transport, hp, device, baud)
+
       self._pending = bytearray()
       self._thread_data = threading.local()
       self._thread_data.queue = 0 # main thread is 0
@@ -2814,6 +2908,10 @@ def xref():
    If bit x is set then GPIO x is selected.
    baud:
    The speed of a serial link in bits per second.
+   cfg_item:
+   A number uniquely identifying a configurable value.
+   cfg_value:
+   The value to give to a configurable item.
    channel:
    A small number identifying an instance of a hardware device.
 
@@ -2938,6 +3036,8 @@ def xref():
    5     @ 11,27
    6     @ 13,29
    7     @ 15
+   host:
+   The remote host (name or dotted quad).
    inout_GPIO:
    A bit mask indicating the GPIO to select.
 
@@ -2949,10 +3049,6 @@ def xref():
    LEVEL_LOW     @ 0     @ Low
    LEVEL_HIGH    @ 1     @ High
    LEVEL_TIMEOUT @ 2     @ Watchdog timeout
-   MASK:
-   A bit mask indicating the GPIO to select.
-
-   If bit x is set then GPIO x is selected.
    nostop:
    Normally a stop condition is asserted after an I2C transaction.  If
    one is not required nostop is set.
@@ -2971,6 +3067,8 @@ def xref():
    PARITY_NONE @ 0     @ No parity
    PARITY_EVEN @ 1     @ Even parity
    PARITY_ODD  @ 2     @ Odd parity
+   port:
+   The remote host port.
    pull:
    A value indicating the desired pulls on a GPIO.
 
