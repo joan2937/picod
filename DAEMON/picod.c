@@ -2580,10 +2580,10 @@ uint32_t debounce(uint32_t levels, uint32_t tick)
    {
       p = &pd_level_info[i];
 
+      bitLevel = (levels>>i) & 1;
+
       if (p->debounce_micros)
       {
-         bitLevel = (levels>>i) & 1;
-
          if (bitLevel != p->last_evt_lv)
          {
             p->debounced = 0;
@@ -2623,6 +2623,22 @@ uint32_t debounce(uint32_t levels, uint32_t tick)
          if (p->last_rpt_lv) levels |= (1ul<<i);
          else                levels &= ~(1ul<<i);
       }
+      else
+      {
+         if (bitLevel != p->last_rpt_lv)
+         {
+            p->watchdogd = 0;
+            p->last_rpt_ts = tick;
+            p->last_rpt_lv = bitLevel;
+         }
+
+         if (bitLevel != p->last_evt_lv)
+         {
+            p->debounced = 0;
+            p->last_evt_ts = tick;
+            p->last_evt_lv = bitLevel;
+         }
+      }
    }
    return levels;
 }
@@ -2632,11 +2648,8 @@ uint32_t watchdog(uint32_t levels, uint32_t tick)
    pd_level_info_p p;
    int i;
    int32_t micro_diff;
-   uint32_t bitLevel;
    uint32_t wdogd;
    uint8_t buf[256];
-
-   /* have any watchdogs expired? */
 
    wdogd = WATCHDOG_BIT;
 
@@ -2660,25 +2673,16 @@ uint32_t watchdog(uint32_t levels, uint32_t tick)
 
       if (p->watchdog_micros)
       {
-         bitLevel = (levels>>i) & 1;
+         if (!p->watchdogd)
+         {
+            micro_diff = tick - p->last_rpt_ts;
 
-         if (bitLevel != p->last_rpt_lv)
-         {
-            p->watchdogd = 0;
-            p->last_rpt_ts = tick;
-            p->last_rpt_lv = bitLevel;
-         }
-         else
-         {
-            if (!p->watchdogd)
+            if (micro_diff > 0)
             {
-               micro_diff = tick - p->last_rpt_ts;
-
                if (cfg_debug_mask & DBG_LEVEL_WATCHDOG)
                {
                   sprintf(buf, "watcdog_gpio=%x g=%d md=%d wdog=%d",
-                     g.GPIO_watchdog, i, micro_diff,
-                     p->watchdog_micros);
+                     g.GPIO_watchdog, i, micro_diff, p->watchdog_micros);
                   debug(buf);
                }
 
@@ -2693,6 +2697,7 @@ uint32_t watchdog(uint32_t levels, uint32_t tick)
          }
       }
    }
+
    return wdogd;
 }
 
@@ -2725,7 +2730,7 @@ void emitLevels(int reports)
 
       /* anything being debounced? */
 
-      if (g.GPIO_debounce) levels = debounce(levels, tick);
+      levels = debounce(levels, tick);
 
       /* have any watchdogs expired? */
 
