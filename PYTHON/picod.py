@@ -164,7 +164,7 @@ import binascii
 import threading
 import atexit
 
-VERSION = 0x00000300
+VERSION = 0x00000500
 
 CLOCK_HZ = 125e6
 
@@ -423,7 +423,7 @@ class _callback_thread(threading.Thread):
       """
       threading.Thread.__init__(self)
       self.pico = pico
-      self._serial_handle = pico._pico_serial_read
+      self._pico_serial_read = pico._pico_serial_read
       self.daemon = True
       self.monitor = 0
       self.level_callbacks = []
@@ -509,7 +509,7 @@ class _callback_thread(threading.Thread):
       CRC2: Hdr+Length+CRC1+Request(s)
       """
       while self.go:
-         d = bytearray(self._serial_handle(5000))
+         d = self._pico_serial_read(5000)
          if len(d):
             #print("serial_read", _byte2hex(d))
             if d[0] != 255 and not in_message:
@@ -923,6 +923,12 @@ class pico():
       if status == picod.STATUS_OKAY:
          print("GPIO levels are 0x{:x}".format(levels))
       [#GPIO levels are 0x100800e#]
+
+         if levels & (1<<6): # check gpio 6
+            print("gpio 6 is high")
+         else:
+            print("gpio 6 is low")
+      [#gpio 6 is low#]
       ...
       """
 
@@ -2700,7 +2706,10 @@ class pico():
 
             _pico_serial = serial.Serial(device, baud, timeout=0)
 
-            self._pico_serial_read = _pico_serial.read
+            def _serial_read(count):
+               return bytearray(_pico_serial.read(count))
+
+            self._pico_serial_read = _serial_read
             self._pico_serial_write = _pico_serial.write
       
          elif transport == 'lgpio':
