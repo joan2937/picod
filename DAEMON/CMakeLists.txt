@@ -13,5 +13,5 @@ pico_enable_stdio_usb(picod 1)
 
 pico_add_extra_outputs(picod)
 
-target_link_libraries(picod pico_stdio pico_stdlib pico_sync pico_multicore hardware_adc hardware_pwm hardware_spi hardware_i2c hardware_pio hardware_dma hardware_uart)
+target_link_libraries(picod pico_stdio pico_stdlib pico_sync pico_multicore pico_unique_id hardware_adc hardware_pwm hardware_spi hardware_i2c hardware_pio hardware_dma hardware_uart)
 

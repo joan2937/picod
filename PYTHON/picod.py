@@ -140,6 +140,7 @@ UTILITIES
 reset                Resets the Pico (frees GPIO, close I2C, SPI, serial)
 sleep                Sleeps the Pico
 tick                 Returns the current Pico tick
+uid                  Returns the Pico's unique id (64-bit number)
 version              Returns the Pico software version (dotted quad)
 set_config_value     Sets the value of an internal configuration item
 get_config_value     Gets the value of an internal configuration item
@@ -164,7 +165,7 @@ import binascii
 import threading
 import atexit
 
-VERSION = 0x00000500
+VERSION = 0x00000600
 
 CLOCK_HZ = 125e6
 
@@ -307,6 +308,8 @@ _CMD_UART_OPEN = 85
 _CMD_UART_CLOSE = 86
 _CMD_UART_READ = 87
 _CMD_UART_WRITE = 88
+
+_CMD_UID = 90
 
 _CMD_TICK = 94
 _CMD_SLEEP_US = 95
@@ -2447,6 +2450,37 @@ class pico():
          self._GPIO_tick, = struct.unpack(">I", data)
 
       return status, self._GPIO_tick
+
+   def uid(self, reply=REPLY_NOW, flush=True):
+      """
+      Returns the Pico's unique id (64-bit number)
+
+      Returns a tuple of status and the uid.
+
+      ...
+      status, uid = pico.uid() # get Pico's unique Id
+
+      if status == picod.STATUS_OKAY:
+         print("Pico UID is 0x{:x}".format(uid))
+      [#Pico UID is 0xe66038b713096330#]
+      ...
+
+      The Pico does not have an on-board unique identifier (all
+      instances of RP2040 silicon are identical and have no persistent
+      state). However, the Pico boots from serial NOR flash devices
+      which have a 64-bit unique ID as a standard feature, and there
+      is a 1:1 association between the Pico and the flash, so this is
+      suitable for use as a unique identifier.
+      """
+
+      status, data = self._request(_CMD_UID, reply=reply, flush=flush)
+
+      uid = None
+
+      if status == STATUS_OKAY:
+         uid, = struct.unpack(">Q", data)
+
+      return status, uid
 
    def set_config_value(self, cfg_item, cfg_value, reply=REPLY_NOW, flush=True):
       """

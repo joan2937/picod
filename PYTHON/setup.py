@@ -6,7 +6,7 @@ with open('README.md') as f:
     long_description = f.read()
 
 setup(name='picod',
-      version='0.0.5.0',
+      version='0.0.6.0',
       zip_safe=False,
       author='joan',
       author_email='joan@abyz.me.uk',

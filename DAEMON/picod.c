@@ -28,6 +28,7 @@ GP15 o  o  GP16
 #include "pico/stdlib.h"
 #include "pico/mutex.h"
 #include "pico/multicore.h"
+#include "pico/unique_id.h"
 #include "hardware/gpio.h"
 #include "hardware/irq.h"
 #include "hardware/adc.h"
@@ -42,7 +43,7 @@ GP15 o  o  GP16
 
 /* defines */
 
-#define PD_VERSION 0x00000300
+#define PD_VERSION 0x00000600
 
 #define CFG_DEBUG_MASK 0
 
@@ -150,6 +151,8 @@ GP15 o  o  GP16
 #define PD_CMD_UART_CLOSE 86
 #define PD_CMD_UART_READ 87
 #define PD_CMD_UART_WRITE 88
+
+#define PD_CMD_UID 90
 
 #define PD_CMD_TICK 94
 #define PD_CMD_SLEEP_US 95
@@ -2377,12 +2380,28 @@ int cmdExec(uint8_t *cBuf)
 
          if (cfg_debug_mask & DBG_LEVEL_1)
          {
-            sprintf(buf, "GPIO_TICK");
+            sprintf(buf, "TICK");
             debug(buf);
          }
 
          pack32(RES+1, g.GPIO_tick);
          reply_len = 5;
+
+         break;
+
+      case PD_CMD_UID:
+
+         // no parameters
+
+         if (cfg_debug_mask & DBG_LEVEL_1)
+         {
+            sprintf(buf, "UID");
+            debug(buf);
+         }
+
+         pico_get_unique_board_id((pico_unique_board_id_t *)(RES+1));
+
+         reply_len = 9;
 
          break;
 
